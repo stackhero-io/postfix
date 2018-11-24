@@ -106,6 +106,27 @@ extern const char *str_tls_level(int);
 #define X509_getm_notAfter X509_get_notAfter
 #endif
 
+ /* Backwards compatibility with OpenSSL < 1.1.1 */
+#if OPENSSL_VERSION_NUMBER < 0x1010100fUL
+#define SSL_CTX_set_num_tickets(ctx, num) ((void)0)
+#endif
+
+ /*-
+  * Backwards compatibility with OpenSSL < 1.1.1a.
+  *
+  * In OpenSSL 1.1.1a the client-only interface SSL_get_server_tmp_key() was
+  * updated to work on both the client and the server, and was renamed to
+  * SSL_get_peer_tmp_key(), with the original name left behind as an alias.  We
+  * use the new name when available.
+  */
+#if OPENSSL_VERSION_NUMBER < 0x1010101fUL
+#undef SSL_get_signature_nid
+#define SSL_get_signature_nid(ssl, pnid) (NID_undef)
+#define tls_get_peer_dh_pubkey SSL_get_server_tmp_key
+#else
+#define tls_get_peer_dh_pubkey SSL_get_peer_tmp_key
+#endif
+
 /* SSL_CIPHER_get_name() got constified in 0.9.7g */
 #if OPENSSL_VERSION_NUMBER >= 0x0090707fL	/* constification */
 #define SSL_CIPHER_const const
@@ -131,6 +152,17 @@ extern const char *str_tls_level(int);
   * TLS library.
   */
 #include <dns.h>
+
+ /*
+  * TLS role, presently for logging.
+  */
+typedef enum {
+    TLS_ROLE_CLIENT, TLS_ROLE_SERVER,
+} TLS_ROLE;
+
+typedef enum {
+    TLS_USAGE_NEW, TLS_USAGE_USED,
+} TLS_USAGE;
 
  /*
   * Names of valid tlsmgr(8) session caches.
@@ -231,6 +263,17 @@ typedef struct {
     const char *cipher_name;
     int     cipher_usebits;
     int     cipher_algbits;
+    const char *kex_name;		/* shared key-exchange algorithm */
+    const char *kex_curve;		/* shared key-exchange ECDHE curve */
+    int     kex_bits;			/* shared FFDHE key exchange bits */
+    const char *clnt_sig_name;		/* client's signature key algorithm */
+    const char *clnt_sig_curve;		/* client's ECDSA curve name */
+    int     clnt_sig_bits;		/* client's RSA signature key bits */
+    const char *clnt_sig_dgst;		/* client's signature digest */
+    const char *srvr_sig_name;		/* server's signature key algorithm */
+    const char *srvr_sig_curve;		/* server's ECDSA curve name */
+    int     srvr_sig_bits;		/* server's RSA signature key bits */
+    const char *srvr_sig_dgst;		/* server's signature digest */
     /* Private. */
     SSL    *con;
     char   *cache_type;			/* tlsmgr(8) cache type if enabled */
@@ -369,10 +412,15 @@ extern void tls_param_init(void);
 #define SSL_OP_NO_TLSv1_2	0L	/* Noop */
 #endif
 
-#ifdef SSL_TXT_TLSV1_3
+ /*
+  * OpenSSL 1.1.1 does not define a TXT macro for TLS 1.3, so we roll our
+  * own.
+  */
+#define TLS_PROTOCOL_TXT_TLSV1_3	"TLSv1.3"
+
+#if defined(TLS1_3_VERSION) && defined(SSL_OP_NO_TLSv1_3)
 #define TLS_PROTOCOL_TLSv1_3	(1<<5)	/* TLSv1_3 */
 #else
-#define SSL_TXT_TLSV1_3		"TLSv1.3"
 #define TLS_PROTOCOL_TLSv1_3	0	/* Unknown */
 #undef  SSL_OP_NO_TLSv1_3
 #define SSL_OP_NO_TLSv1_3	0L	/* Noop */
@@ -380,7 +428,7 @@ extern void tls_param_init(void);
 
 #define TLS_KNOWN_PROTOCOLS \
 	( TLS_PROTOCOL_SSLv2 | TLS_PROTOCOL_SSLv3 | TLS_PROTOCOL_TLSv1 \
-	   | TLS_PROTOCOL_TLSv1_1 | TLS_PROTOCOL_TLSv1_2 )
+	   | TLS_PROTOCOL_TLSv1_1 | TLS_PROTOCOL_TLSv1_2 | TLS_PROTOCOL_TLSv1_3 )
 #define TLS_SSL_OP_PROTOMASK(m) \
 	    ((((m) & TLS_PROTOCOL_SSLv2) ? SSL_OP_NO_SSLv2 : 0L) \
 	     | (((m) & TLS_PROTOCOL_SSLv3) ? SSL_OP_NO_SSLv3 : 0L) \
@@ -421,7 +469,12 @@ extern const NAME_CODE tls_cipher_grade_table[];
 extern const char *tls_set_ciphers(TLS_APPL_STATE *, const char *,
 				           const char *, const char *);
 
-#endif
+ /*
+  * Populate TLS context with TLS 1.3-related signature parameters.
+  */
+extern void tls_get_signature_params(TLS_SESS_STATE *);
+
+#endif					/* TLS_INTERNAL */
 
  /*
   * tls_client.c
@@ -549,6 +602,7 @@ extern void tls_session_stop(TLS_APPL_STATE *, VSTREAM *, int, int, TLS_SESS_STA
 extern const char *tls_compile_version(void);
 extern const char *tls_run_version(void);
 extern const char **tls_pkey_algorithms(void);
+extern void tls_log_summary(TLS_ROLE, TLS_USAGE, TLS_SESS_STATE *);
 
 #ifdef TLS_INTERNAL
 
