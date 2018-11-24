@@ -502,8 +502,23 @@ TLS_APPL_STATE *tls_server_init(const TLS_SERVER_INIT_PROPS *props)
 	    ticketable = 0;
 	}
     }
-    if (ticketable)
+    if (ticketable) {
 	SSL_CTX_set_tlsext_ticket_key_cb(server_ctx, ticket_cb);
+
+	/*
+	 * OpenSSL 1.1.1 introduces support for TLS 1.3, which can issue more
+	 * than one ticket per handshake.  While this may be appropriate for
+	 * communication between browsers and webservers, it is not terribly
+	 * useful for MTAs, many of which other than Postfix don't do TLS
+	 * session caching at all, and Postfix has no mechanism for storing
+	 * multiple session tickets, if more than one sent, the second
+	 * clobbers the first.  OpenSSL 1.1.1 servers default to issuing two
+	 * tickets for non-resumption handshakes, we reduce this to one.  Our
+	 * ticket decryption callback already (since 2.11) asks OpenSSL to
+	 * avoid issuing new tickets when the presented ticket is re-usable.
+	 */
+	SSL_CTX_set_num_tickets(server_ctx, 1);
+    }
 #endif
     if (!ticketable)
 	off |= SSL_OP_NO_TICKET;
@@ -938,14 +953,12 @@ TLS_SESS_STATE *tls_server_post_accept(TLS_SESS_STATE *TLScontext)
 	tls_stream_start(TLScontext->stream, TLScontext);
 
     /*
-     * All the key facts in a single log entry.
+     * With the handshake done, extract TLS 1.3 signature metadata.
      */
+    tls_get_signature_params(TLScontext);
+
     if (TLScontext->log_mask & TLS_LOG_SUMMARY)
-	msg_info("%s TLS connection established from %s: %s with cipher %s "
-	      "(%d/%d bits)", !TLS_CERT_IS_PRESENT(TLScontext) ? "Anonymous"
-		 : TLS_CERT_IS_TRUSTED(TLScontext) ? "Trusted" : "Untrusted",
-	 TLScontext->namaddr, TLScontext->protocol, TLScontext->cipher_name,
-		 TLScontext->cipher_usebits, TLScontext->cipher_algbits);
+	tls_log_summary(TLS_ROLE_SERVER, TLS_USAGE_NEW, TLScontext);
 
     tls_int_seed();
 
