@@ -589,7 +589,7 @@ static int set_cert_stuff(SSL_CTX *ctx, const char *cert_type,
      * single pass, avoiding potential race conditions during key rollover.
      */
     if (strcmp(cert_file, key_file) == 0)
-	return (load_mixed_file(ctx, cert_file));
+	return (load_mixed_file(ctx, cert_file) == 0);
 
     /*
      * We need both the private key (in key_file) and the public key
@@ -690,6 +690,7 @@ int     main(int argc, char *argv[])
     int     ch;
     int     mixed = 0;
     int     ret;
+    char   *key_file = 0;
     SSL_CTX *ctx;
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -707,8 +708,11 @@ int     main(int argc, char *argv[])
 	tls_print_errors();
 	exit(1);
     }
-    while ((ch = GETOPT(argc, argv, "m")) > 0) {
+    while ((ch = GETOPT(argc, argv, "mk:")) > 0) {
 	switch (ch) {
+	case 'k':
+	    key_file = optarg;
+	    break;
 	case 'm':
 	    mixed = 1;
 	    break;
@@ -722,7 +726,9 @@ int     main(int argc, char *argv[])
     if (argc < 1)
 	usage();
 
-    if (mixed)
+    if (key_file)
+	ret = set_cert_stuff(ctx, "any", argv[0], key_file) == 0;
+    else if (mixed)
 	ret = load_mixed_file(ctx, argv[0]);
     else
 	ret = load_chain_files(ctx, argv[0]);
