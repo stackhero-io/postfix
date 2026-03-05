@@ -1,0 +1,183 @@
+SHELL	= /bin/sh
+SRCS	= proxymap.c
+OBJS	= proxymap.o
+HDRS	= 
+TESTSRC	=
+DEFS	= -I. -I$(INC_DIR) -D$(SYSTYPE)
+CFLAGS	= $(DEBUG) $(OPT) $(DEFS)
+TESTPROG= 
+PROG	= proxymap
+INC_DIR = ../../include
+LIBS	= ../../lib/lib$(LIB_PREFIX)master$(LIB_SUFFIX) \
+	../../lib/lib$(LIB_PREFIX)global$(LIB_SUFFIX) \
+	../../lib/lib$(LIB_PREFIX)util$(LIB_SUFFIX)
+
+.c.o:;	$(CC) $(CFLAGS) -c $*.c
+
+$(PROG): $(OBJS) $(LIBS)
+	$(CC) $(CFLAGS) $(SHLIB_RPATH) -o $@ $(OBJS) $(LIBS) $(SYSLIBS)
+
+$(OBJS): ../../conf/makedefs.out
+
+Makefile: Makefile.in
+	cat ../../conf/makedefs.out $? >$@
+
+test:	$(TESTPROG)
+
+tests:	empty_proxymap_table empty_proxywrite_table \
+	proxy_read_map_works_for_proxied proxy_read_map_works_for_both \
+	proxy_write_works smtpd_restriction_classes_works file_name_works \
+	ignores_non_dictionary_form
+
+# Create a configuration that references no tables. The default tables
+# are platform-specific and that would complicate tests.
+SETUP_FILES = \
+	echo rm -f main.cf master.cf; \
+	echo alias_maps = >> main.cf; \
+	echo local_recipient_maps = >> main.cf; \
+	echo smtpd_forbidden_commands = >> main.cf; \
+	echo postscreen_cache_map = >> main.cf; \
+	echo address_verify_map = >> main.cf; \
+
+CLEANUP_FILES = rm -f main.cf master.cf
+
+empty_proxymap_table: $(PROG)
+	@echo RUN empty_proxymap_table
+	@$(SETUP_FILES)
+	touch -t 197101010000 main.cf
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-all-proxymap | diff /dev/null -
+	@$(CLEANUP_FILES)
+	@echo PASS empty_proxymap_table; echo
+
+empty_proxywrite_table: $(PROG)
+	@echo RUN empty_proxywrite_table
+	@$(SETUP_FILES)
+	touch -t 197101010000 main.cf
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-all-proxywrite | diff /dev/null -
+	@$(CLEANUP_FILES)
+	@echo PASS empty_proxywrite_table; echo
+
+proxy_read_map_works_for_proxied: $(PROG)
+	@echo RUN proxy_read_map_works_for_proxied
+	@$(SETUP_FILES)
+	echo local_recipient_maps = proxy:unix:passwd.byname cdb:/some/aliases >> main.cf
+	touch -t 197101010000 main.cf
+	echo unix:passwd.byname > proxy_read_map_works_for_proxied.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-proxy-proxymap | \
+	    diff proxy_read_map_works_for_proxied.tmp -
+	@$(CLEANUP_FILES) proxy_read_map_works_for_proxied.tmp
+	@echo PASS proxy_read_map_works_for_proxied; echo
+
+proxy_read_map_works_for_both: $(PROG)
+	@echo RUN proxy_read_map_works_for_both
+	@$(SETUP_FILES)
+	echo local_recipient_maps = proxy:unix:passwd.byname cdb:/some/aliases >> main.cf
+	touch -t 197101010000 main.cf
+	echo cdb:/some/aliases  > proxy_read_map_works_for_both.tmp
+	echo unix:passwd.byname >> proxy_read_map_works_for_both.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-all-proxymap | diff proxy_read_map_works_for_both.tmp -
+	@$(CLEANUP_FILES) proxy_read_map_works_for_both.tmp
+	@echo PASS proxy_read_map_works_for_both; echo
+
+proxy_write_works: $(PROG)
+	@echo RUN proxy_write_works
+	@$(SETUP_FILES)
+	echo postscreen_cache_map = proxy:lmdb:/some/path >> main.cf
+	touch -t 197101010000 main.cf
+	echo lmdb:/some/path > proxy_write_works.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-proxy-proxywrite | \
+	    diff proxy_write_works.tmp -
+	@$(CLEANUP_FILES) proxy_write_works.tmp
+	@echo PASS proxy_write_works; echo
+
+smtpd_restriction_classes_works: $(PROG)
+	@echo RUN smtpd_restriction_classes_works
+	@$(SETUP_FILES)
+	echo smtpd_restriction_classes = foo >> main.cf
+	echo 'foo = $$bar' >> main.cf
+	echo bar = proxy:lmdb:/some/file >> main.cf
+	touch -t 197101010000 main.cf
+	echo lmdb:/some/file > smtpd_restriction_classes_works.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-proxy-proxymap | \
+	    diff smtpd_restriction_classes_works.tmp -
+	@$(CLEANUP_FILES) smtpd_restriction_classes_works.tmp
+	@echo PASS smtpd_restriction_classes_works; echo
+
+file_name_works: $(PROG)
+	@echo RUN file_name_works
+	@$(SETUP_FILES)
+	echo mynetworks = `pwd`/file_name_works_file >> main.cf
+	echo proxy:lmdb:/some/file > file_name_works_file
+	touch -t 197101010000 main.cf
+	echo lmdb:/some/file > file_name_works.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-proxy-proxymap | \
+	    diff file_name_works.tmp -
+	@$(CLEANUP_FILES) file_name_works.tmp file_name_works_file
+	@echo PASS file_name_works; echo
+
+ignores_non_dictionary_form: $(PROG)
+	@echo RUN ignores_non_dictionary_form
+	@$(SETUP_FILES)
+	echo "mynetworks = map:/path [123::456] other_non_dict" >> main.cf
+	touch -t 197101010000 main.cf
+	echo map:/path  > ignores_non_dictionary_form.tmp
+	MAIL_CONFIG=. $(SHLIB_ENV) ${VALGRIND} ./$(PROG) \
+	    -SVnexport-all-proxymap | diff ignores_non_dictionary_form.tmp -
+	@$(CLEANUP_FILES) ignores_non_dictionary_form.tmp
+	@echo PASS ignores_non_dictionary_form; echo
+
+root_tests:
+
+update: ../../libexec/$(PROG)
+
+../../libexec/$(PROG): $(PROG)
+	cp $(PROG) ../../libexec
+
+clean:
+	rm -f *.o *core $(PROG) $(TESTPROG) junk 
+
+tidy:	clean
+
+depend: $(MAKES)
+	(sed '1,/^# do not edit/!d' Makefile.in; \
+	set -e; for i in [a-z][a-z0-9]*.c; do \
+	    $(CC) -E $(DEFS) $(INCL) $$i | grep -v '[<>]' | sed -n -e '/^# *1 *"\([^"]*\)".*/{' \
+	    -e 's//'`echo $$i|sed 's/c$$/o/'`': \1/' \
+	    -e 's/o: \.\//o: /' -e p -e '}' ; \
+	done | LANG=C sort -u) | grep -v '[.][o][:][ ][/]' >$$$$ && mv $$$$ Makefile.in
+	@$(EXPORT) make -f Makefile.in Makefile 1>&2
+
+# do not edit below this line - it is generated by 'make depend'
+proxymap.o: ../../include/argv.h
+proxymap.o: ../../include/attr.h
+proxymap.o: ../../include/check_arg.h
+proxymap.o: ../../include/dict.h
+proxymap.o: ../../include/dict_pipe.h
+proxymap.o: ../../include/dict_proxy.h
+proxymap.o: ../../include/dict_union.h
+proxymap.o: ../../include/htable.h
+proxymap.o: ../../include/iostuff.h
+proxymap.o: ../../include/mail_conf.h
+proxymap.o: ../../include/mail_params.h
+proxymap.o: ../../include/mail_proto.h
+proxymap.o: ../../include/mail_server.h
+proxymap.o: ../../include/mail_version.h
+proxymap.o: ../../include/mkmap.h
+proxymap.o: ../../include/msg.h
+proxymap.o: ../../include/myflock.h
+proxymap.o: ../../include/mymalloc.h
+proxymap.o: ../../include/nvtable.h
+proxymap.o: ../../include/readlline.h
+proxymap.o: ../../include/stringops.h
+proxymap.o: ../../include/sys_defs.h
+proxymap.o: ../../include/vbuf.h
+proxymap.o: ../../include/vstream.h
+proxymap.o: ../../include/vstring.h
+proxymap.o: proxymap.c
